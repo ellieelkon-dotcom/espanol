@@ -552,7 +552,7 @@ function wordsTab(){
 }
 
 // ---------- backup
-const fmtDate=s=>{ if(!s) return "לא ידוע"; const d=new Date(s); return isNaN(d)?String(s):d.toLocaleDateString("he-IL",{day:"numeric",month:"numeric",year:"numeric"}); };
+const fmtDate=s=>{ if(!s) return "לא ידוע"; const d=new Date(s); return isNaN(d)?String(s).slice(0,10):d.toLocaleDateString("he-IL",{day:"numeric",month:"numeric",year:"numeric"}); };
 function wireBackup(){
   const msg=t=>{ const m=document.getElementById("bkmsg"); if(m) m.textContent=t; };
   document.getElementById("bkp").onclick=async()=>{
