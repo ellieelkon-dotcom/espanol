@@ -512,13 +512,17 @@ function cloze(o){
     if(i>=q.length) return done();
     const c=q[i], r=S.srs[c.id], [ans,at,inf]=c.cl;
     const pre=c.ex.slice(0,at), post=c.ex.slice(at+ans.length);
-    const hint=inf?`<p class="small muted es" lang="es">${esc(inf)}</p>`:`<p class="small muted">${esc(c.he)}</p>`;
+    // a verb needs the person and the tense to be answerable, and the Hebrew sentence
+    // settles both without giving away a verb the hint already names
+    const hint=inf
+      ? `<p class="small muted es" lang="es">${esc(inf)}</p>${c.exHe?`<p class="small">${esc(c.exHe)}</p>`:""}`
+      : `<p class="small muted">${esc(c.he)}</p>`;
     sessionShell(`<div class="top"><span>${esc(o.label)}</span><span>${Math.min(i+1,total)}/${total}${q.length>total?` +${q.length-total}`:""}</span></div>
       <div class="bar"><i style="width:${i/q.length*100}%"></i></div>
       <div class="box"><span class="tag">${esc(c.topic)}${r?.miss?" · טעות קודמת":""}</span>
         <p class="prompt es" lang="es">${esc(pre)}<span class="gap"></span>${esc(post)}</p>
         ${hint}
-        <p class="small muted">${inf?"להטות את הפועל למשפט":"להשלים את המילה החסרה"}</p></div>
+        <p class="small muted">${inf?"להטות את הפועל לפי המשפט בעברית":"להשלים את המילה החסרה"}</p></div>
       <div class="opts">${typeBox("")}</div>
       <div id="fb"></div><button class="ghost" id="quit">לחזור לדף הבית</button>`);
     document.getElementById("quit").onclick=home;
