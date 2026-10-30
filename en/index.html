@@ -102,6 +102,13 @@ button{cursor:pointer}
 .accents{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;direction:ltr}
 .accents button{min-width:42px;height:42px;border-radius:11px;border:2px solid var(--line);background:var(--surface);color:var(--ink);font-size:19px}
 .typed{font-size:15px;color:var(--ink)}
+.sheet{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+.sheet table{border-collapse:collapse;font-size:13px;direction:ltr;min-width:100%}
+.sheet th,.sheet td{border-inline-end:1px solid var(--line);border-block-end:1px solid var(--line);padding:7px 10px;text-align:start;white-space:nowrap}
+.sheet th{background:var(--chip);font-weight:700}
+.sheet tr:last-child td{border-block-end:0}
+.sheet th:last-child,.sheet td:last-child{border-inline-end:0}
+.sheet .opt-col{color:var(--muted)}
 .ta{min-height:120px;border-radius:14px;border:2px solid var(--line);background:var(--surface);padding:10px 12px;width:100%;font-size:14px;direction:ltr;resize:vertical}
 .fb{border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:4px}
 .fb.ok{background:var(--ok-bg);color:var(--ok)} .fb.bad{background:var(--bad-bg);color:var(--bad)}
@@ -223,7 +230,7 @@ function day(d=today()){
 }
 let saving=false,dirty=false;
 const STORE="practica.en.state.v1";
-const DECK_KEY="practica.en.deck";
+const DECK_KEY="practica.en.deck", SEEN_KEY="practica.en.seen";
 let deck=null, deckNote="";               // deck null means the built-in list
 const hash36=s=>{ let h=5381; for(let i=0;i<s.length;i++) h=((h*33)^s.charCodeAt(i))>>>0; return h.toString(36); };
 const storeKey=()=>deck?STORE+"::"+hash36(deck.src||deck.name):STORE;
@@ -310,12 +317,15 @@ async function getJSON(name){ const r=await fetch("data/"+name+".json"); if(!r.o
 // A spreadsheet published to the web serves CSV, which is the format people
 // already have. JSON in this app's own shape is accepted too.
 function parseCSV(text){
+  // rows copied out of a spreadsheet arrive tab separated, a downloaded file comma separated
+  const head=text.split("\n")[0]||"";
+  const sep=(head.split("\t").length>head.split(",").length)?"\t":",";
   const rows=[]; let row=[], cell="", quoted=false;
   for(let i=0;i<text.length;i++){
     const ch=text[i];
     if(quoted){ if(ch==='"'){ if(text[i+1]==='"'){ cell+='"'; i++; } else quoted=false; } else cell+=ch; }
     else if(ch==='"') quoted=true;
-    else if(ch===","){ row.push(cell); cell=""; }
+    else if(ch===sep){ row.push(cell); cell=""; }
     else if(ch==="\n"){ row.push(cell); rows.push(row); row=[]; cell=""; }
     else if(ch!=="\r") cell+=ch;
   }
@@ -426,7 +436,10 @@ async function boot(){
   let saved=null; try{ saved=JSON.parse(localStorage.getItem(storeKey())||"null"); }catch(e){}
   S=Object.assign(blank(), saved||{}); C.baseline=S.baseline||null; // placement test results stay on this device only
   try{ navigator.storage?.persist?.(); }catch(e){}
-  home();
+  // a learner arriving for the first time should be asked whose words these are,
+  // instead of landing in a stranger's vocabulary without knowing it can change
+  let seen=false; try{ seen=!!localStorage.getItem(SEEN_KEY); }catch(e){}
+  if(!deck&&!seen&&!Object.keys(S.srs).length) deckSetup(true); else home();
   // a list behind a link is refreshed in the background; the new words appear
   // next time the app opens, so a round in progress is never swapped underneath
   if(deck&&deck.src&&!asked) fetchList(deck.src)
@@ -900,22 +913,11 @@ function progress(){
     ${hard.length?`<div class="box"><h3>Hardest words</h3><ul class="list">${hard.map(c=>`<li><span class="es" lang="es">${esc(c.es)}</span><span class="muted">${esc(c.he)} · ${S.srs[c.id].lapses}×</span></li>`).join("")}</ul></div>`:""}
     ${Object.keys(byTopic).length?`<div class="box"><h3>Words by topic</h3>${Object.entries(byTopic).sort((a,b)=>pct(a[1].ok,a[1].n)-pct(b[1].ok,b[1].n)).map(([k,x])=>`<div class="mrow"><span>${esc(k)}</span>${meter(pct(x.ok,x.n))}<span class="num">${pct(x.ok,x.n)}%</span></div>`).join("")}</div>`:""}
     <div class="box"><h3>Word list</h3>
-      ${deckNote?`<p class="small" style="color:var(--bad)">${esc(deckNote)}</p>`:""}
       ${deck
-        ? `<p class="small">Using your own list: <b>${C.deck.cards.length} words</b>${blanks?`, ${blanks} of them with a sentence to complete`:""}.</p>
-           ${deck.src?`<p class="small muted es" style="word-break:break-all">${esc(deck.src)}</p>`:`<p class="small muted">${esc(deck.name)}</p>`}
-           ${C.deck.skipped&&C.deck.skipped.length?`<p class="small" style="color:var(--bad)">${C.deck.skipped.length} rows were skipped: ${esc(C.deck.skipped.slice(0,3).join("; "))}</p>`:""}`
-        : `<p class="small muted">Using the built-in list, last updated ${esc(fmtDate(C.deck.updated))} (${C.deck.cards.length} words).</p>`}
-      <input class="search" id="deckurl" type="url" inputmode="url" placeholder="Link to your word list" autocomplete="off">
-      <button class="ghost" id="deckgo">Use this link</button>
-      <button class="ghost" id="deckopen">Paste a list instead</button>
-      <textarea class="ta" id="deckpaste" hidden placeholder="Paste the rows straight from your spreadsheet"></textarea>
-      <button class="ghost" id="deckpastego" hidden>Use what I pasted</button>
-      <button class="ghost" id="deckfile">Load from a file</button>
-      <input type="file" id="deckfileinput" accept=".csv,.tsv,.txt,.json,text/csv,application/json" hidden>
-      ${deck?`<button class="ghost" id="deckoff">Go back to the built-in list</button>`:""}
-      <p class="small muted">The list needs a column for the Spanish word and one for its translation. Example, example translation, topic and note are used when they are there. A Google Sheet works through File, Share, Publish to web, CSV. If a link will not load, copy the rows and paste them instead. Progress is kept separately for each list, so switching never mixes them up.</p>
-      <p class="small" id="deckmsg" role="status"></p></div>
+        ? `<p class="small">Your own list: <b>${C.deck.cards.length} words</b>${blanks?`, ${blanks} with a sentence to complete`:""}.</p>
+           <p class="small muted" style="word-break:break-all">${esc(deck.src||deck.name)}</p>`
+        : `<p class="small muted">The built-in Spanish list, last updated ${esc(fmtDate(C.deck.updated))} (${C.deck.cards.length} words).</p>`}
+      <button class="ghost" id="deckchange">${deck?"Change or replace this list":"Use my own word list"}</button></div>
     <div class="box"><h3>Backup and transfer</h3>
       <p class="small muted">Progress is saved only on this phone.</p>
       <button class="ghost" id="bkp">Save a backup file</button>
@@ -923,37 +925,104 @@ function progress(){
       <input type="file" id="impfile" accept=".json,application/json,text/plain" hidden>
       <p class="small" id="bkmsg" role="status"></p></div>`);
   wireBackup();
-  wireDeckBox();
+  document.getElementById("deckchange").onclick=()=>deckSetup(false);
 }
-function wireDeckBox(){
+const SAMPLE=[["Spanish","Translation","Example","Example translation","Topic"],
+  ["la mesa","table","La mesa de la cocina es grande.","The kitchen table is big.","House"],
+  ["el perro","dog","Mi perro duerme en el sofá.","My dog sleeps on the sofa.","Animals"],
+  ["rápido","fast","El tren es muy rápido.","The train is very fast.","Adjectives"]];
+let pending=null;   // a list that has been read but not adopted yet
+
+function deckSetup(first){
+  tab=""; if(tts) speechSynthesis.cancel();
+  const cols=SAMPLE[0].map((h,i)=>`<th${i>1?' class="opt-col"':""}>${esc(h)}</th>`).join("");
+  const rows=SAMPLE.slice(1,3).map(r=>`<tr>${r.map((c,i)=>`<td${i>1?' class="opt-col"':""}>${esc(c)}</td>`).join("")}</tr>`).join("");
+  sessionShell(`
+    <h1>${first?"Practise your own Spanish words":"Your word list"}</h1>
+    <p class="muted">This app drills a list of Spanish words. Bring your own, and everything you practise comes from it.</p>
+
+    <div class="box"><h3>1. What a list looks like</h3>
+      <div class="sheet"><table><thead><tr>${cols}</tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="small muted"><b>Spanish</b> and <b>Translation</b> are the only ones you need. The rest are used when you add them, and an example sentence is what lets a word turn into a fill-in-the-blank question.</p>
+      <button class="ghost" id="copysample">Copy these columns to start a sheet</button>
+    </div>
+
+    <div class="box"><h3>2. Bring it in</h3>
+      <p class="small muted">Select your rows in the spreadsheet, copy, and paste them here. This always works.</p>
+      <textarea class="ta" id="deckpaste" placeholder="Paste your rows here"></textarea>
+      <button class="cta" id="deckpastego">Read what I pasted</button>
+      <p class="small muted" style="margin-top:6px">Or, if your list is saved as a file:</p>
+      <button class="ghost" id="deckfile">Choose a file</button>
+      <input type="file" id="deckfileinput" accept=".csv,.tsv,.txt,.json,text/csv,application/json" hidden>
+      <p class="small muted" style="margin-top:6px">Or, to keep it updating by itself, publish the sheet to the web as CSV and paste the link:</p>
+      <input class="search" id="deckurl" type="url" inputmode="url" placeholder="https://..." autocomplete="off">
+      <button class="ghost" id="deckgo">Use this link</button>
+      <p class="small" id="deckmsg" role="status"></p>
+    </div>
+
+    <div id="preview"></div>
+
+    ${first?"":`<button class="cta" id="deckback">Keep ${deck?"my current list":"the built-in list"}</button>`}
+    ${deck?`<button class="ghost" id="deckoff">Go back to the built-in Spanish list</button>`:
+            `<button class="ghost" id="deckskip">Just try the built-in Spanish list</button>`}`);
+  wireDeckBox(first);
+}
+
+function showPreview(){
+  const box=document.getElementById("preview");
+  if(!pending){ box.innerHTML=""; return; }
+  const {list,name}=pending, few=list.cards.slice(0,3);
+  box.innerHTML=`<div class="box"><h3>Does this look right?</h3>
+    <p><b>${list.cards.length} words</b> were read from ${esc(name)}.</p>
+    <ul class="list">${few.map(c=>`<li><span class="es" lang="es">${esc(c.es)}</span><span class="muted">${esc(c.he)}</span></li>`).join("")}</ul>
+    <p class="small muted">${list.cards.filter(c=>Array.isArray(c.cl)).length} of them have an example the app can turn into a fill-in-the-blank.</p>
+    ${list.skipped.length?`<p class="small" style="color:var(--bad)">${list.skipped.length} row${list.skipped.length>1?"s":""} left out: ${esc(list.skipped.slice(0,3).join("; "))}${list.skipped.length>3?"…":""}</p>`:""}
+    <button class="cta" id="useit">Yes, use this list</button>
+    <button class="ghost" id="dropit">No, let me try again</button></div>`;
+  document.getElementById("useit").onclick=()=>{
+    const err=writeDeck({src:pending.src||"",name:pending.name,list:pending.list});
+    if(err){ document.getElementById("deckmsg").textContent=err; return; }
+    location.reload();
+  };
+  document.getElementById("dropit").onclick=()=>{ pending=null; showPreview(); };
+  box.scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+function wireDeckBox(first){
   const el=id=>document.getElementById(id);
-  const msg=(t,bad)=>{ const m=el("deckmsg"); m.textContent=t; m.style.color=bad?"var(--bad)":"var(--muted)"; };
-  async function adopt(make,src,name){
-    msg("Reading the list…",false);
-    try{
-      const list=await make();
-      const err=writeDeck({src:src||"",name,list});
-      if(err) return msg(err,true);
-      location.reload();
-    }catch(e){ msg(e.message,true); }
+  const msg=(t,bad)=>{ const m=el("deckmsg"); if(m){ m.textContent=t; m.style.color=bad?"var(--bad)":"var(--muted)"; } };
+  // nothing is replaced until the preview is confirmed
+  async function read(make,src,name){
+    msg("Reading…",false); pending=null; showPreview();
+    try{ pending={list:await make(),src:src||"",name}; msg("",false); showPreview(); }
+    catch(e){ msg(e.message,true); }
   }
+  const sample=el("copysample");
+  if(sample) sample.onclick=async()=>{
+    const tsv=SAMPLE.map(r=>r.join("\t")).join("\n");
+    try{ await navigator.clipboard.writeText(tsv); msg("Copied. Paste it into a new spreadsheet, then replace the example rows with your words.",false); }
+    catch(e){ const t=el("deckpaste"); t.value=tsv; msg("Could not reach the clipboard, so the example is in the box below instead.",true); }
+  };
   const url=el("deckurl"), go=el("deckgo");
-  go.onclick=()=>{ const v=url.value.trim(); if(v) adopt(()=>fetchList(v),v,v); };
+  go.onclick=()=>{ const v=url.value.trim(); if(v) read(()=>fetchList(v),v,"that link"); };
   url.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); go.click(); } };
 
   const paste=el("deckpaste"), pasteGo=el("deckpastego");
-  el("deckopen").onclick=()=>{ paste.hidden=false; pasteGo.hidden=false; paste.focus(); };
-  pasteGo.onclick=()=>{ const v=paste.value.trim(); if(v) adopt(()=>readList(v),"","A list you pasted"); };
+  pasteGo.onclick=()=>{ const v=paste.value.trim(); v?read(()=>readList(v),"","what you pasted"):msg("Paste your rows into the box first.",true); };
 
   const file=el("deckfileinput");
   el("deckfile").onclick=()=>file.click();
   file.onchange=async()=>{
     const f=file.files&&file.files[0]; if(!f) return;
     const text=await f.text(); file.value="";
-    adopt(()=>readList(text),"",f.name);
+    read(()=>readList(text),"",f.name);
   };
   const off=el("deckoff");
   if(off) off.onclick=()=>{ try{ localStorage.removeItem(DECK_KEY); }catch(e){} location.reload(); };
+  const skip=el("deckskip");
+  if(skip) skip.onclick=()=>{ try{ localStorage.setItem(SEEN_KEY,"1"); }catch(e){} pending=null; home(); };
+  const back=el("deckback");
+  if(back) back.onclick=()=>{ pending=null; home(); };
 }
 
 if("serviceWorker" in navigator){
