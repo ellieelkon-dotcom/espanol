@@ -778,7 +778,13 @@ function progress(){
   wireBackup();
 }
 
-if("serviceWorker" in navigator){ addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{})); }
+if("serviceWorker" in navigator){
+  // a page opened from the cache keeps showing the old version until it reloads,
+  // so when a new worker takes over, reload once and land on the new one
+  const had=!!navigator.serviceWorker.controller; let reloaded=false;
+  navigator.serviceWorker.addEventListener("controllerchange",()=>{ if(had&&!reloaded){ reloaded=true; location.reload(); } });
+  addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));
+}
 boot();
 </script>
 
