@@ -102,6 +102,10 @@ button{cursor:pointer}
 .accents{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;direction:ltr}
 .accents button{min-width:42px;height:42px;border-radius:11px;border:2px solid var(--line);background:var(--surface);color:var(--ink);font-size:19px}
 .typed{font-size:15px;color:var(--ink)}
+.shape{display:flex;gap:13px;flex-wrap:wrap;justify-content:center;direction:ltr;padding-block:4px}
+.shape span{display:flex;gap:4px;align-items:flex-end}
+.shape i{display:block;width:13px;height:2px;background:var(--muted);opacity:.55;border-radius:2px}
+.shape b{font-weight:400;color:var(--muted)}
 .fb{border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:4px}
 .fb.ok{background:var(--ok-bg);color:var(--ok)} .fb.bad{background:var(--bad-bg);color:var(--bad)}
 .fb .note{color:var(--ink);font-size:15px}
@@ -264,6 +268,17 @@ function judge(typed,list){
   if(list.some(a=>a===t||noArt(a)===t)) return "ok";
   if(list.some(a=>a.length>=5&&dist(a,t)<=1)) return "near";
   return "bad";
+}
+// a Hebrew word can map to a Spanish phrase of any length, so show how many
+// letters and words the answer has; cards that accept alternatives get nothing
+function shape(es){
+  if(/[\/,]/.test(es)) return "";
+  const t=es.replace(/\(.*?\)/g,"").trim();
+  if(!t) return "";
+  const parts=t.split(/\s+/), n=parts.map(w=>[...w].filter(ch=>/\p{L}/u.test(ch)).length);
+  if(!n.length||n.some(x=>!x)) return "";
+  return `<div class="shape" role="img" aria-label="${n.join(" ")} אותיות">${parts.map(w=>
+    `<span>${[...w].map(ch=>/\p{L}/u.test(ch)?"<i></i>":`<b>${esc(ch)}</b>`).join("")}</span>`).join("")}</div>`;
 }
 function typeBox(ph){
   return `<input class="type es" id="ta" lang="es" dir="ltr" enterkeyhint="done" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="${esc(ph)}">
@@ -435,7 +450,7 @@ function words(o){
     sessionShell(`${head(c)}
       <div class="box center"><span class="tag">${esc(c.topic)}${r?.miss?" · טעות קודמת":""}</span>
         <div class="big">${esc(c.he)}</div>
-        <p class="small muted">לכתוב את המילה בספרדית</p></div>
+        <p class="small muted">לכתוב את המילה בספרדית</p>${shape(c.es)}</div>
       <div class="opts">${typeBox(c.es.includes("/")?"אפשר אחת מהשתיים":"")}</div>
       <div id="fb"></div><button class="ghost" id="quit">לחזור לדף הבית</button>`);
     document.getElementById("quit").onclick=home;
