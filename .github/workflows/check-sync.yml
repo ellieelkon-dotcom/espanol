@@ -1,0 +1,19 @@
+name: check data sync
+
+on:
+  push:
+    paths:
+      - 'data/**'
+      - 'en/data/**'
+      - 'tools/check-sync.py'
+      - '.github/workflows/check-sync.yml'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare data/ with en/data/
+        run: python3 tools/check-sync.py
