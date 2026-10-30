@@ -397,7 +397,8 @@ function topicQueue(topic){
   return shuffle(cs).sort((a,b)=>w(a)-w(b)).slice(0,10);
 }
 function distractors(card,field){
-  const pool=C.deck.cards.filter(c=>c.id!==card.id&&c[field]!==card[field]);
+  // a card that shares this card's Spanish would be a second correct answer, not a distractor
+  const pool=C.deck.cards.filter(c=>c.id!==card.id&&c[field]!==card[field]&&c.es!==card.es);
   const same=shuffle(pool.filter(c=>c.topic===card.topic)),other=shuffle(pool.filter(c=>c.topic!==card.topic));
   return [...new Set([...same,...other].map(c=>c[field]))].slice(0,3);
 }
