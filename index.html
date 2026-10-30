@@ -95,6 +95,13 @@ button{cursor:pointer}
 .opt.wrong{border-color:var(--bad);background:var(--bad-bg);color:var(--bad)}
 .opt.dk{color:var(--muted);font-size:16px}
 .opt[disabled]{cursor:default}
+.type{height:58px;border-radius:14px;border:2px solid var(--line);background:var(--surface);padding:0 14px;width:100%;font-size:21px;font-weight:600;text-align:center;direction:ltr}
+.type:focus{border-color:var(--pri);outline:none}
+.type.right{border-color:var(--ok);background:var(--ok-bg);color:var(--ok)}
+.type.wrong{border-color:var(--bad);background:var(--bad-bg);color:var(--bad)}
+.accents{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;direction:ltr}
+.accents button{min-width:42px;height:42px;border-radius:11px;border:2px solid var(--line);background:var(--surface);color:var(--ink);font-size:19px}
+.typed{font-size:15px;color:var(--ink)}
 .fb{border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:4px}
 .fb.ok{background:var(--ok-bg);color:var(--ok)} .fb.bad{background:var(--bad-bg);color:var(--bad)}
 .fb .note{color:var(--ink);font-size:15px}
@@ -233,6 +240,57 @@ if(tts){pickVoice();speechSynthesis.onvoiceschanged=pickVoice;}
 function speak(t,rate=1,end){ if(!tts){end&&end();return} speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(t); u.lang="es-ES"; if(voice)u.voice=voice; u.rate=rate; if(end){u.onend=end;u.onerror=end} speechSynthesis.speak(u); }
 const sayable=s=>s.replace(/\(.*?\)/g,"").replace(/\s*\/\s*/g,", ").trim();
 
+// ---------- typed answers
+const ACC="áéíóúñü";
+const flat=s=>String(s??"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[¡!¿?.,;:()"']/g,"").replace(/\s+/g," ").trim();
+const noArt=s=>s.replace(/^(el|la|los|las|un|una|unos|unas)\s+/,"");
+function accepted(es){ // every spelling worth accepting for one card
+  const out=new Set();
+  String(es).replace(/\(.*?\)/g,"").split(/[/,]/).forEach(part=>{ const v=flat(part); if(v){ out.add(v); out.add(noArt(v)); } });
+  const whole=flat(es); out.add(whole); out.add(noArt(whole));
+  return [...out].filter(Boolean);
+}
+function dist(a,b){ // edit distance, used only to forgive a single typo
+  if(Math.abs(a.length-b.length)>1) return 2;
+  let prev=[...Array(b.length+1).keys()];
+  for(let i=1;i<=a.length;i++){ const row=[i];
+    for(let j=1;j<=b.length;j++) row[j]=Math.min(prev[j]+1,row[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));
+    prev=row; }
+  return prev[b.length];
+}
+// "ok" exact once accents and articles are ignored, "near" one typo away, "bad" otherwise
+function judge(typed,list){
+  const t=noArt(flat(typed)); if(!t) return "bad";
+  if(list.some(a=>a===t||noArt(a)===t)) return "ok";
+  if(list.some(a=>a.length>=5&&dist(a,t)<=1)) return "near";
+  return "bad";
+}
+function typeBox(ph){
+  return `<input class="type es" id="ta" lang="es" dir="ltr" enterkeyhint="done" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="${esc(ph)}">
+    <div class="accents">${ACC.split("").map(ch=>`<button type="button" class="acc" data-ch="${ch}">${ch}</button>`).join("")}</div>
+    <button class="cta" id="chk">לבדוק</button>
+    <button class="opt dk" id="dk">לא יודעת</button>`;
+}
+function wireType(onSend){
+  const ta=document.getElementById("ta");
+  app.querySelectorAll(".acc").forEach(b=>b.onclick=()=>{
+    const at=ta.selectionStart??ta.value.length;
+    ta.value=ta.value.slice(0,at)+b.dataset.ch+ta.value.slice(ta.selectionEnd??at);
+    ta.focus(); ta.setSelectionRange(at+1,at+1);
+  });
+  ta.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); onSend(ta.value,false); } };
+  document.getElementById("chk").onclick=()=>onSend(ta.value,false);
+  document.getElementById("dk").onclick=()=>onSend("",true);
+  setTimeout(()=>ta.focus(),50);
+  return ta;
+}
+function lockType(verdict){
+  const ta=document.getElementById("ta"); if(!ta) return;
+  ta.disabled=true; ta.classList.add(verdict==="bad"?"wrong":"right");
+  ["chk","dk"].forEach(id=>{const b=document.getElementById(id); if(b) b.hidden=true;});
+  const row=app.querySelector(".accents"); if(row) row.hidden=true;
+}
+
 // ---------- boot
 async function getJSON(name){ const r=await fetch("data/"+name+".json"); if(!r.ok) throw new Error(name+" "+r.status); return r.json(); }
 async function boot(){
@@ -289,6 +347,7 @@ function home(){
     <section style="display:flex;flex-direction:column;gap:8px"><span class="label">תרגול חופשי</span>
       <div class="chips">
         <button class="chipbtn" data-free="w">מילים</button>
+        <button class="chipbtn" data-free="c">משפטים</button>
         <button class="chipbtn" data-free="m">הטעויות שלי${miss?` <span class="n">${miss}</span>`:""}</button>
         <button class="chipbtn" data-free="g">דקדוק</button>
         <button class="chipbtn" data-free="l">שמיעה</button>
@@ -305,6 +364,7 @@ function startDaily(p,chain){ const extra=partDone(p); const back={chain:chain&&
   else if(p==="g") grammar(extra,back.chain); else listen(extra,back.chain); }
 function startFree(k){
   if(k==="w") words({queue:buildQueue(8,true),label:"מילים · תרגול חופשי",extra:true,kind:"free"});
+  else if(k==="c") cloze({queue:clozeQueue(8),label:"משפטים · תרגול חופשי"});
   else if(k==="m"){ const q=shuffle(missCards()).slice(0,12); if(!q.length) return emptyMsg("אין טעויות פתוחות","כל מילה שתטעי בה תיכנס לכאן, ותצא אחרי שלוש תשובות נכונות בימים שונים."); words({queue:q,label:"הטעויות שלי",extra:true,kind:"miss"}); }
   else if(k==="g") grammar(true,false); else listen(true,false);
 }
@@ -352,26 +412,49 @@ function grade(c,ok){
 function words(o){
   const q=o.queue.slice(); let i=0; const retry=new Set(); const total=q.length;
   if(!q.length) return emptyMsg("אין כרטיסים","החפיסה ריקה. אוסיף מילים אחרי השיעור הבא.");
+  const head=c=>`<div class="top"><span>${esc(o.label)}</span><span>${Math.min(i+1,total)}/${total}${q.length>total?` +${q.length-total}`:""}</span></div>
+      <div class="bar"><i style="width:${i/q.length*100}%"></i></div>`;
   function show(){
     if(i>=q.length) return done();
-    const c=q[i], r=S.srs[c.id], dir=(r&&r.b>=1&&Math.random()<.5)?"he2es":"es2he";
-    const field=dir==="es2he"?"he":"es", right=c[field], opts=shuffle([right,...distractors(c,field)]), isEs=field==="es";
-    sessionShell(`<div class="top"><span>${esc(o.label)}</span><span>${Math.min(i+1,total)}/${total}${q.length>total?` +${q.length-total}`:""}</span></div>
-      <div class="bar"><i style="width:${i/q.length*100}%"></i></div>
-      <div class="box center"><span class="tag">${esc(c.topic)}${r?.miss?" · טעות קודמת":""}</span>
-        <div class="big ${dir==="es2he"?"es":""}" ${dir==="es2he"?'lang="es"':""}>${esc(dir==="es2he"?c.es:c.he)}</div>
-        ${dir==="es2he"?`<button class="play" id="say">${ICO_PLAY}<span>להשמיע</span></button>`:`<p class="small muted">בחרי את המילה בספרדית</p>`}</div>
-      <div class="opts">${opts.map(v=>`<button class="opt ${isEs?"es":""}" ${isEs?'lang="es"':""} data-v="${esc(v)}">${esc(v)}</button>`).join("")}
+    if(S.srs[q[i].id]) return showType(q[i]);
+    // a word met for the first time gets the easy direction; from then on it is typed
+    const c=q[i], right=c.he, opts=shuffle([right,...distractors(c,"he")]);
+    sessionShell(`${head(c)}
+      <div class="box center"><span class="tag">${esc(c.topic)} · מילה חדשה</span>
+        <div class="big es" lang="es">${esc(c.es)}</div>
+        <button class="play" id="say">${ICO_PLAY}<span>להשמיע</span></button></div>
+      <div class="opts">${opts.map(v=>`<button class="opt" data-v="${esc(v)}">${esc(v)}</button>`).join("")}
         <button class="opt dk" data-v="">לא יודעת</button></div>
       <div id="fb"></div><button class="ghost" id="quit">לחזור לדף הבית</button>`);
     document.getElementById("quit").onclick=home;
     const say=document.getElementById("say"); if(say){ say.onclick=()=>speak(sayable(c.es),.9); speak(sayable(c.es),.9); }
     app.querySelectorAll(".opt").forEach(b=>b.onclick=()=>answer(c,b,right));
   }
+  function showType(c){
+    const r=S.srs[c.id], list=accepted(c.es);
+    sessionShell(`${head(c)}
+      <div class="box center"><span class="tag">${esc(c.topic)}${r?.miss?" · טעות קודמת":""}</span>
+        <div class="big">${esc(c.he)}</div>
+        <p class="small muted">לכתוב את המילה בספרדית</p></div>
+      <div class="opts">${typeBox(c.es.includes("/")?"אפשר אחת מהשתיים":"")}</div>
+      <div id="fb"></div><button class="ghost" id="quit">לחזור לדף הבית</button>`);
+    document.getElementById("quit").onclick=home;
+    wireType((value,gaveUp)=>{
+      const verdict=gaveUp?"bad":judge(value,list), ok=verdict!=="bad";
+      lockType(verdict);
+      const lead=gaveUp?"" : (verdict==="near"?`<span class="note typed">כמעט: כתבת <span class="es" lang="es">${esc(value.trim())}</span></span>`
+        :(verdict==="ok"&&flat(value)!==flat(c.es)&&noArt(flat(value))!==noArt(flat(c.es))?`<span class="note typed">הכתיב המלא: <span class="es" lang="es">${esc(c.es)}</span></span>`
+        :(verdict==="bad"?`<span class="note typed">כתבת <span class="es" lang="es">${esc(value.trim())}</span></span>`:"")));
+      settle(c,ok,lead);
+    });
+  }
   function answer(c,btn,right){
     const ok=btn.dataset.v===right;
     app.querySelectorAll(".opt").forEach(b=>{b.disabled=true; if(b.dataset.v===right) b.classList.add("right")});
     if(!ok&&btn.dataset.v) btn.classList.add("wrong");
+    settle(c,ok,"");
+  }
+  function settle(c,ok,lead){
     const first=!retry.has(c.id);
     if(first){ grade(c,ok); count("w",ok,o.extra); if(!ok){ retry.add(c.id); q.push(c); } save(); }
     speak(sayable(c.es),.9);
@@ -379,7 +462,7 @@ function words(o){
     const missNote = !ok&&first ? "המילה נכנסה לרשימת הטעויות שלך. היא תחזור בסוף הסבב ושוב מחר."
       : (ok&&first&&r.miss ? `עוד ${MISS_CLEAR-(r.mc||0)} תשובות נכונות בימים שונים והיא תצא מהטעויות.` : (ok&&first&&!r.miss&&r.lapses&&r.mc===0&&r.mcd===null?"":""));
     const extraNote = c.kind==="verb"&&c.note ? `<span class="note small"><span class="muted">הטיה: </span><span class="es" lang="es">${esc(c.note)}</span></span>` : "";
-    document.getElementById("fb").innerHTML=`<div class="fb ${ok?"ok":"bad"}"><b>${ok?"נכון":"התשובה:"} <span class="es" lang="es">${esc(c.es)}</span> · ${esc(c.he)}</b>${missNote?`<span class="note">${missNote}</span>`:""}</div>
+    document.getElementById("fb").innerHTML=`<div class="fb ${ok?"ok":"bad"}"><b>${ok?"נכון":"התשובה:"} <span class="es" lang="es">${esc(c.es)}</span> · ${esc(c.he)}</b>${lead||""}${missNote?`<span class="note">${missNote}</span>`:""}</div>
       ${c.ex?`<div class="box" style="margin-top:10px;gap:8px"><span class="small muted">דוגמה במשפט</span>
         <div style="display:flex;align-items:flex-start;gap:10px"><p class="es" lang="es" style="flex:1;font-size:18px;font-weight:500">${esc(c.ex)}</p><button class="iconbtn" id="exsay" aria-label="להשמיע את המשפט">${ICO_SPK}</button></div>
         <p class="muted">${esc(c.exHe||"")}</p>${extraNote}</div>`:(c.note?`<p class="small muted es" lang="es" style="margin-top:8px">${esc(c.note)}</p>`:"")}
@@ -395,13 +478,76 @@ function words(o){
       <p class="muted">${o.extra?"בתרגול החופשי היום":"היום"}: ${w[1]} נכונות מתוך ${w[0]}.</p>
       <p class="muted">${stuckCount()} מילים נשמרו · ${missCards().length} טעויות פתוחות</p></div>
       <button class="cta" id="go">${nextP?"לחלק הבא: "+PNAME[nextP]:"לדף הבית"}</button>
-      <button class="ghost" id="more">${o.kind==="miss"?"עוד סבב טעויות":o.kind==="topic"?"עוד סבב בנושא":"עוד 8 מילים"}</button>`);
+      <button class="ghost" id="more">${o.kind==="miss"?"עוד סבב טעויות":o.kind==="topic"?"עוד סבב בנושא":"עוד 8 מילים"}</button>
+      <button class="ghost" id="cz">להשלים משפטים</button>`);
+    document.getElementById("cz").onclick=()=>cloze({queue:clozeQueue(8),label:"משפטים · תרגול חופשי"});
     document.getElementById("go").onclick=()=>o.chain?afterDaily(true):home();
     document.getElementById("more").onclick=()=>{
       if(o.kind==="miss") startFree("m");
       else if(o.kind==="topic") words({...o,queue:topicQueue(o.topic)});
       else words({queue:buildQueue(8,true),label:"מילים · תרגול חופשי",extra:true,kind:"free"});
     };
+  }
+  show();
+}
+
+// ---------- sentence completion
+const clozeCards=()=>C.deck.cards.filter(c=>Array.isArray(c.cl));
+function clozeQueue(n){
+  const t=today(), pool=clozeCards();
+  if(!pool.length) return [];
+  const met=pool.filter(c=>S.srs[c.id]);
+  const due=shuffle(met.filter(c=>S.srs[c.id].due<=t));
+  const q=[], add=c=>{ if(q.length<n&&!q.includes(c)) q.push(c); };
+  shuffle(due.filter(c=>S.srs[c.id].miss)).forEach(add);
+  due.forEach(add);
+  shuffle(met.filter(c=>S.srs[c.id].due>t)).forEach(add);
+  shuffle(pool.filter(c=>!S.srs[c.id])).forEach(add);
+  return shuffle(q);
+}
+function cloze(o){
+  const q=o.queue.slice(); let i=0; const retry=new Set(); const total=q.length;
+  if(!q.length) return emptyMsg("אין משפטים לתרגל","מצב הזה עובד על מילים שיש להן משפט דוגמה. אוסיף עוד אחרי השיעור הבא.");
+  function show(){
+    if(i>=q.length) return done();
+    const c=q[i], r=S.srs[c.id], [ans,at,inf]=c.cl;
+    const pre=c.ex.slice(0,at), post=c.ex.slice(at+ans.length);
+    const hint=inf?`<p class="small muted es" lang="es">${esc(inf)}</p>`:`<p class="small muted">${esc(c.he)}</p>`;
+    sessionShell(`<div class="top"><span>${esc(o.label)}</span><span>${Math.min(i+1,total)}/${total}${q.length>total?` +${q.length-total}`:""}</span></div>
+      <div class="bar"><i style="width:${i/q.length*100}%"></i></div>
+      <div class="box"><span class="tag">${esc(c.topic)}${r?.miss?" · טעות קודמת":""}</span>
+        <p class="prompt es" lang="es">${esc(pre)}<span class="gap"></span>${esc(post)}</p>
+        ${hint}
+        <p class="small muted">${inf?"להטות את הפועל למשפט":"להשלים את המילה החסרה"}</p></div>
+      <div class="opts">${typeBox("")}</div>
+      <div id="fb"></div><button class="ghost" id="quit">לחזור לדף הבית</button>`);
+    document.getElementById("quit").onclick=home;
+    wireType((value,gaveUp)=>{
+      const verdict=gaveUp?"bad":judge(value,[flat(ans)]), ok=verdict!=="bad";
+      lockType(verdict);
+      const full=pre+ans+post, first=!retry.has(c.id);
+      if(first){ grade(c,ok); count("w",ok,true); if(!ok){ retry.add(c.id); q.push(c); } save(); }
+      speak(full,.95);
+      const typed=value.trim();
+      const lead=!gaveUp&&typed&&verdict!=="ok"?`<span class="note typed">כתבת <span class="es" lang="es">${esc(typed)}</span></span>`:"";
+      document.getElementById("fb").innerHTML=`<div class="fb ${ok?"ok":"bad"}"><b>${ok?"נכון":"התשובה:"} <span class="es" lang="es">${esc(ans)}</span></b>${lead}${inf?`<span class="note">מהפועל <span class="es" lang="es">${esc(inf)}</span> · ${esc(c.he)}</span>`:""}</div>
+        <div class="box" style="margin-top:10px;gap:8px"><span class="small muted">המשפט המלא</span>
+          <div style="display:flex;align-items:flex-start;gap:10px"><p class="es" lang="es" style="flex:1;font-size:18px;font-weight:500">${esc(full)}</p><button class="iconbtn" id="exsay" aria-label="להשמיע את המשפט">${ICO_SPK}</button></div>
+          ${c.exHe?`<p class="muted">${esc(c.exHe)}</p>`:""}</div>
+        <button class="cta" id="nx" style="margin-top:10px;width:100%">המשך</button>`;
+      document.getElementById("exsay").onclick=()=>speak(full,.95);
+      const nx=document.getElementById("nx"); nx.onclick=()=>{i++;show()}; nx.focus();
+    });
+  }
+  function done(){
+    const d=day(), w=d.xw||[0,0];
+    sessionShell(`<div class="box center"><h2>סיימת את המשפטים</h2>
+      <p class="muted">בתרגול החופשי היום: ${w[1]} נכונות מתוך ${w[0]}.</p>
+      <p class="muted">${missCards().length} טעויות פתוחות</p></div>
+      <button class="cta" id="go">לדף הבית</button>
+      <button class="ghost" id="more">עוד 8 משפטים</button>`);
+    document.getElementById("go").onclick=home;
+    document.getElementById("more").onclick=()=>cloze({queue:clozeQueue(8),label:"משפטים · תרגול חופשי"});
   }
   show();
 }

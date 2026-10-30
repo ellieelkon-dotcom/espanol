@@ -100,7 +100,8 @@ def check_deck():
         if other is None:
             continue
         where = f"{name} card {cid}"
-        for field in ("es", "ex", "kind"):
+        # cl is the sentence-completion blank: Spanish only, so it must match exactly
+        for field in ("es", "ex", "kind", "cl"):
             same(where, field, card.get(field), other.get(field))
         for field in ("he", "exHe", "topic"):
             check_translated(where, field, card.get(field, ""), other.get(field, ""))
