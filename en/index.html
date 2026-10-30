@@ -102,6 +102,7 @@ button{cursor:pointer}
 .accents{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;direction:ltr}
 .accents button{min-width:42px;height:42px;border-radius:11px;border:2px solid var(--line);background:var(--surface);color:var(--ink);font-size:19px}
 .typed{font-size:15px;color:var(--ink)}
+.ta{min-height:120px;border-radius:14px;border:2px solid var(--line);background:var(--surface);padding:10px 12px;width:100%;font-size:14px;direction:ltr;resize:vertical}
 .fb{border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:4px}
 .fb.ok{background:var(--ok-bg);color:var(--ok)} .fb.bad{background:var(--bad-bg);color:var(--bad)}
 .fb .note{color:var(--ink);font-size:15px}
@@ -222,8 +223,17 @@ function day(d=today()){
 }
 let saving=false,dirty=false;
 const STORE="practica.en.state.v1";
+const DECK_KEY="practica.en.deck";
+let deck=null, deckNote="";               // deck null means the built-in list
+const hash36=s=>{ let h=5381; for(let i=0;i<s.length;i++) h=((h*33)^s.charCodeAt(i))>>>0; return h.toString(36); };
+const storeKey=()=>deck?STORE+"::"+hash36(deck.src||deck.name):STORE;
+function readDeck(){ try{ return JSON.parse(localStorage.getItem(DECK_KEY)||"null"); }catch(e){ return null; } }
+function writeDeck(d){
+  try{ localStorage.setItem(DECK_KEY,JSON.stringify(d)); return ""; }
+  catch(e){ return "That list is too large to keep on this phone. Try a shorter one."; }
+}
 async function save(){ // progress lives only on this device
-  try{ localStorage.setItem(STORE,JSON.stringify(S)); }
+  try{ localStorage.setItem(storeKey(),JSON.stringify(S)); }
   catch(e){ const w=document.getElementById("savewarn"); if(w) w.hidden=false; }
 }
 function count(kind,ok,extra,qs){ // kind w|g|l
@@ -295,16 +305,133 @@ function lockType(verdict){
 
 // ---------- boot
 async function getJSON(name){ const r=await fetch("data/"+name+".json"); if(!r.ok) throw new Error(name+" "+r.status); return r.json(); }
+
+// ---------- word lists from a link
+// A spreadsheet published to the web serves CSV, which is the format people
+// already have. JSON in this app's own shape is accepted too.
+function parseCSV(text){
+  const rows=[]; let row=[], cell="", quoted=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(quoted){ if(ch==='"'){ if(text[i+1]==='"'){ cell+='"'; i++; } else quoted=false; } else cell+=ch; }
+    else if(ch==='"') quoted=true;
+    else if(ch===","){ row.push(cell); cell=""; }
+    else if(ch==="\n"){ row.push(cell); rows.push(row); row=[]; cell=""; }
+    else if(ch!=="\r") cell+=ch;
+  }
+  if(cell!==""||row.length){ row.push(cell); rows.push(row); }
+  return rows.filter(r=>r.some(c=>c.trim()));
+}
+const COLUMNS={
+  es:["spanish","español","espanol","es","word","palabra"],
+  he:["translation","meaning","english","he","traducción","traduccion"],
+  ex:["example","example sentence","ejemplo","sentence","ex"],
+  exHe:["example translation","translation of example","example meaning","exhe"],
+  topic:["topic","tema","category","subject"],
+  kind:["kind","type","tipo"],
+  note:["note","notes","nota","comment"],
+};
+function cardsFromRows(rows){
+  const head=rows[0].map(h=>h.trim().toLowerCase().replace(/\s+/g," "));
+  const at={};
+  for(const [field,names] of Object.entries(COLUMNS)){
+    const i=head.findIndex(h=>names.includes(h));
+    if(i>=0) at[field]=i;
+  }
+  if(at.es===undefined||at.he===undefined)
+    throw new Error(`The list needs a column for the Spanish word and one for its translation. The first row reads: ${head.join(", ")||"(empty)"}`);
+  const cards=[], skipped=[];
+  rows.slice(1).forEach((r,n)=>{
+    const get=f=>at[f]!==undefined?String(r[at[f]]??"").trim():"";
+    const es=get("es"), he=get("he");
+    if(!es&&!he) return;
+    if(!es||!he){ skipped.push(`row ${n+2}: ${es?"no translation":"no Spanish word"}`); return; }
+    let kind=get("kind").toLowerCase();
+    if(!["vocab","verb","time"].includes(kind)) kind="vocab";
+    cards.push({es,he,ex:get("ex"),exHe:get("exHe"),topic:get("topic")||"General",
+      kind,note:get("note"),src:"",id:"x"+hash36(es)});
+  });
+  return {cards,skipped};
+}
+// Opens the blank for sentence completion on a list that has no `cl` of its own.
+// It only matches a word that stands in its own example, so most verbs, which
+// appear conjugated, sit the mode out until that engine runs here too.
+function blankFor(card){
+  if(!card.ex||!card.es) return null;
+  const bare=s=>s.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+  const forms=new Set();
+  card.es.replace(/\(.*?\)/g,"").split(/[/,]/).forEach(part=>{
+    const v=noArt(bare(part.trim().replace(/[¡!¿?.,;:]/g,"")));
+    if(!v) return;
+    const bits=v.split(" "), head=bits[0], tail=bits.length>1?" "+bits.slice(1).join(" "):"";
+    const group=new Set([head]);
+    if(/[oae]$/.test(head)) for(const x of "oae") group.add(head.slice(0,-1)+x);
+    for(const g of [...group]){ group.add(g+"s"); if(!/[aeiou]$/.test(g)) group.add(g+"es"); }
+    group.forEach(g=>forms.add(g+tail));
+  });
+  const find=text=>{
+    const toks=[...text.matchAll(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+/g)].map(m=>[m.index,m.index+m[0].length]);
+    for(let n=Math.min(4,toks.length);n>=1;n--)
+      for(let i=0;i+n<=toks.length;i++){
+        const a=toks[i][0], b=toks[i+n-1][1];
+        if(forms.has(bare(text.slice(a,b)))&&(n>1||b-a>2)) return [a,b];
+      }
+    return null;
+  };
+  const span=find(card.ex);
+  if(!span) return null;
+  // another form of the same word left in the sentence would give the answer away
+  if(find(card.ex.slice(0,span[0])+" "+card.ex.slice(span[1]))) return null;
+  return [card.ex.slice(span[0],span[1]), span[0], ""];
+}
+function readList(text){
+  text=String(text||"").trim();
+  if(!text) throw new Error("That list is empty.");
+  let out;
+  if(text.startsWith("{")||text.startsWith("[")){
+    let j; try{ j=JSON.parse(text); }catch(e){ throw new Error("That looks like JSON but it could not be read."); }
+    const cards=(Array.isArray(j)?j:j.cards)||[];
+    out={cards:cards.filter(c=>c&&c.es&&c.he).map(c=>({topic:"General",kind:"vocab",note:"",src:"",ex:"",exHe:"",...c,
+           id:c.id||"x"+hash36(c.es)})), updated:(j&&j.updated)||"", skipped:[]};
+  } else {
+    const built=cardsFromRows(parseCSV(text));
+    out={cards:built.cards, updated:"", skipped:built.skipped};
+  }
+  if(!out.cards.length) throw new Error("No words were found in that list.");
+  out.cards.forEach(c=>{ if(!Array.isArray(c.cl)){ const b=blankFor(c); if(b) c.cl=b; } });
+  return out;
+}
+async function fetchList(url){
+  let r;
+  try{ r=await fetch(url,{cache:"no-cache"}); }
+  catch(e){ throw new Error("A browser is not allowed to read that link. Some sites block it. Open the list, copy it, and use Paste a list instead."); }
+  if(!r.ok) throw new Error(`That link answered ${r.status}. A Google Sheet has to be published to the web (File, Share, Publish to web, CSV) rather than only shared.`);
+  return readList(await r.text());
+}
 async function boot(){
+  const asked=new URLSearchParams(location.search).get("deck");
+  if(asked) history.replaceState(null,"",location.pathname);
+  deck=readDeck();
   try{
+    // grammar and the listening clips are the same for every learner, so they stay built in
     const [d,g,c]=await Promise.all(["deck","grammar","clips"].map(n=>getJSON(n).catch(()=>null)));
     if(!d) throw new Error("deck");
     C.deck=d; if(g) C.grammar=g; if(c) C.clips=c;
+    if(asked){
+      try{ const got=await fetchList(asked); deck={src:asked,name:asked,list:got}; deckNote=writeDeck(deck); }
+      catch(e){ deckNote=e.message; }
+    }
+    if(deck) C.deck=deck.list;
   }catch(e){ app.innerHTML=`<div class="box"><h2>Loading failed</h2><p class="muted">The first time, you need internet to download the words. After that the app also works offline.</p><button class="cta" onclick="location.reload()">Try again</button></div>`; return; }
-  let saved=null; try{ saved=JSON.parse(localStorage.getItem(STORE)||"null"); }catch(e){}
+  let saved=null; try{ saved=JSON.parse(localStorage.getItem(storeKey())||"null"); }catch(e){}
   S=Object.assign(blank(), saved||{}); C.baseline=S.baseline||null; // placement test results stay on this device only
   try{ navigator.storage?.persist?.(); }catch(e){}
   home();
+  // a list behind a link is refreshed in the background; the new words appear
+  // next time the app opens, so a round in progress is never swapped underneath
+  if(deck&&deck.src&&!asked) fetchList(deck.src)
+    .then(got=>{ writeDeck({...deck,list:got}); })
+    .catch(()=>{});
 }
 
 // ---------- derived
@@ -744,6 +871,7 @@ function progress(){
   const sorted=units.slice().sort((a,b)=>a.v-b.v), weak=sorted.filter(u=>u.v<75).slice(0,3), strong=sorted.slice().reverse().filter(u=>u.v>=80).slice(0,3);
   const hard=C.deck.cards.filter(c=>S.srs[c.id]?.lapses).sort((a,b)=>S.srs[b.id].lapses-S.srs[a.id].lapses).slice(0,8);
   const miss=missCards().length;
+  const blanks=C.deck.cards.filter(c=>Array.isArray(c.cl)).length;
   let rec;
   if(!units.length) rec="Practise for a few days to get a recommendation.";
   else if(weak.length){ const u=weak[0]; rec=`Focus on ${u.label} (${u.v}% correct). `+(u.label.startsWith("Words")?"Open the topic in the Words tab and practise it.":u.label.startsWith("Grammar")?"Do a free grammar round and reread the rule.":"Listen to one more clip a day, even at the current speed."); }
@@ -771,13 +899,61 @@ function progress(){
       :`<p class="muted">Shows up after a few days of practice.</p>`}</div>
     ${hard.length?`<div class="box"><h3>Hardest words</h3><ul class="list">${hard.map(c=>`<li><span class="es" lang="es">${esc(c.es)}</span><span class="muted">${esc(c.he)} · ${S.srs[c.id].lapses}×</span></li>`).join("")}</ul></div>`:""}
     ${Object.keys(byTopic).length?`<div class="box"><h3>Words by topic</h3>${Object.entries(byTopic).sort((a,b)=>pct(a[1].ok,a[1].n)-pct(b[1].ok,b[1].n)).map(([k,x])=>`<div class="mrow"><span>${esc(k)}</span>${meter(pct(x.ok,x.n))}<span class="num">${pct(x.ok,x.n)}%</span></div>`).join("")}</div>`:""}
+    <div class="box"><h3>Word list</h3>
+      ${deckNote?`<p class="small" style="color:var(--bad)">${esc(deckNote)}</p>`:""}
+      ${deck
+        ? `<p class="small">Using your own list: <b>${C.deck.cards.length} words</b>${blanks?`, ${blanks} of them with a sentence to complete`:""}.</p>
+           ${deck.src?`<p class="small muted es" style="word-break:break-all">${esc(deck.src)}</p>`:`<p class="small muted">${esc(deck.name)}</p>`}
+           ${C.deck.skipped&&C.deck.skipped.length?`<p class="small" style="color:var(--bad)">${C.deck.skipped.length} rows were skipped: ${esc(C.deck.skipped.slice(0,3).join("; "))}</p>`:""}`
+        : `<p class="small muted">Using the built-in list, last updated ${esc(fmtDate(C.deck.updated))} (${C.deck.cards.length} words).</p>`}
+      <input class="search" id="deckurl" type="url" inputmode="url" placeholder="Link to your word list" autocomplete="off">
+      <button class="ghost" id="deckgo">Use this link</button>
+      <button class="ghost" id="deckopen">Paste a list instead</button>
+      <textarea class="ta" id="deckpaste" hidden placeholder="Paste the rows straight from your spreadsheet"></textarea>
+      <button class="ghost" id="deckpastego" hidden>Use what I pasted</button>
+      <button class="ghost" id="deckfile">Load from a file</button>
+      <input type="file" id="deckfileinput" accept=".csv,.tsv,.txt,.json,text/csv,application/json" hidden>
+      ${deck?`<button class="ghost" id="deckoff">Go back to the built-in list</button>`:""}
+      <p class="small muted">The list needs a column for the Spanish word and one for its translation. Example, example translation, topic and note are used when they are there. A Google Sheet works through File, Share, Publish to web, CSV. If a link will not load, copy the rows and paste them instead. Progress is kept separately for each list, so switching never mixes them up.</p>
+      <p class="small" id="deckmsg" role="status"></p></div>
     <div class="box"><h3>Backup and transfer</h3>
-      <p class="small muted">Progress is saved only on this phone. The word list was last updated on ${esc(fmtDate(C.deck.updated))} (${C.deck.cards.length} words).</p>
+      <p class="small muted">Progress is saved only on this phone.</p>
       <button class="ghost" id="bkp">Save a backup file</button>
       <button class="ghost" id="imp">Import progress from a file</button>
       <input type="file" id="impfile" accept=".json,application/json,text/plain" hidden>
       <p class="small" id="bkmsg" role="status"></p></div>`);
   wireBackup();
+  wireDeckBox();
+}
+function wireDeckBox(){
+  const el=id=>document.getElementById(id);
+  const msg=(t,bad)=>{ const m=el("deckmsg"); m.textContent=t; m.style.color=bad?"var(--bad)":"var(--muted)"; };
+  async function adopt(make,src,name){
+    msg("Reading the list…",false);
+    try{
+      const list=await make();
+      const err=writeDeck({src:src||"",name,list});
+      if(err) return msg(err,true);
+      location.reload();
+    }catch(e){ msg(e.message,true); }
+  }
+  const url=el("deckurl"), go=el("deckgo");
+  go.onclick=()=>{ const v=url.value.trim(); if(v) adopt(()=>fetchList(v),v,v); };
+  url.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); go.click(); } };
+
+  const paste=el("deckpaste"), pasteGo=el("deckpastego");
+  el("deckopen").onclick=()=>{ paste.hidden=false; pasteGo.hidden=false; paste.focus(); };
+  pasteGo.onclick=()=>{ const v=paste.value.trim(); if(v) adopt(()=>readList(v),"","A list you pasted"); };
+
+  const file=el("deckfileinput");
+  el("deckfile").onclick=()=>file.click();
+  file.onchange=async()=>{
+    const f=file.files&&file.files[0]; if(!f) return;
+    const text=await f.text(); file.value="";
+    adopt(()=>readList(text),"",f.name);
+  };
+  const off=el("deckoff");
+  if(off) off.onclick=()=>{ try{ localStorage.removeItem(DECK_KEY); }catch(e){} location.reload(); };
 }
 
 if("serviceWorker" in navigator){

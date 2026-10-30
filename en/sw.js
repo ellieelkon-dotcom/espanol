@@ -1,5 +1,5 @@
 // Offline support. App shell: cache first. Word lists (data/): network first, cached copy when offline.
-const VERSION="v7";
+const VERSION="v8";
 const SHELL="practica-en-shell-"+VERSION, DATA="practica-en-data", FONTS="practica-en-fonts";
 const SHELL_FILES=["./","index.html","manifest.webmanifest","../icons/icon-180.png","../icons/icon-192.png","../icons/icon-512.png"];
 const DATA_FILES=["data/deck.json","data/grammar.json","data/clips.json"];
