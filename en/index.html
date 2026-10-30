@@ -230,7 +230,10 @@ function day(d=today()){
 }
 let saving=false,dirty=false;
 const STORE="practica.en.state.v1";
-const DECK_KEY="practica.en.deck", SEEN_KEY="practica.en.seen";
+const DECK_KEY="practica.en.deck", SEEN_KEY="practica.en.seen", GRAM_KEY="practica.en.grammar";
+let gLevel=null;
+function readLevel(){ try{ const v=JSON.parse(localStorage.getItem(GRAM_KEY)||"null"); return Array.isArray(v)&&v.length?v:null; }catch(e){ return null; } }
+function writeLevel(v){ try{ v&&v.length?localStorage.setItem(GRAM_KEY,JSON.stringify(v)):localStorage.removeItem(GRAM_KEY); }catch(e){} gLevel=v&&v.length?v:null; }
 let deck=null, deckNote="";               // deck null means the built-in list
 const hash36=s=>{ let h=5381; for(let i=0;i<s.length;i++) h=((h*33)^s.charCodeAt(i))>>>0; return h.toString(36); };
 const storeKey=()=>deck?STORE+"::"+hash36(deck.src||deck.name):STORE;
@@ -524,7 +527,7 @@ async function fetchList(url){
 async function boot(){
   const asked=new URLSearchParams(location.search).get("deck");
   if(asked) history.replaceState(null,"",location.pathname);
-  deck=readDeck();
+  deck=readDeck(); gLevel=readLevel();
   try{
     // grammar and the listening clips are the same for every learner, so they stay built in
     const [d,g,c]=await Promise.all(["deck","grammar","clips"].map(n=>getJSON(n).catch(()=>null)));
@@ -575,9 +578,9 @@ function sessionShell(inner){ app.innerHTML=inner; window.scrollTo(0,0); }
 function home(){
   tab="today"; if(tts) speechSynthesis.cancel();
   const x=day(), st=streak(), next=["w","g","l"].find(p=>!partDone(p)), miss=missCards().length;
-  const gt=C.grammar.topics?.[C.grammar.focus];
+  const act=gActive(), gt=C.grammar.topics?.[act.includes(C.grammar.focus)?C.grammar.focus:act[0]];
   const tile=p=>{const n=Math.min(x[p][0],GOAL[p]), f=n/GOAL[p], done=partDone(p);
-    const sub={w:`${dueCount()} to review`,g:(gt?.short||"")+(gActive().length>1?" and more":""),l:`Speed ${Math.round(S.rate*100)}%`}[p];
+    const sub={w:`${dueCount()} to review`,g:(gt?.short||gt?.name||"")+(act.length>1?" and more":""),l:`Speed ${Math.round(S.rate*100)}%`}[p];
     return `<button class="part ${p===next?"next":""}" data-go="${p}" style="cursor:pointer;color:inherit;font:inherit">
       <span class="ring ${done?"done":""}" style="background:conic-gradient(var(--cta) 0 ${f*100}%, var(--chip) ${f*100}% 100%)"><span>${done?"✓":`${n}/${GOAL[p]}`}</span></span>
       <b>${PNAME[p]}</b><small>${esc(sub)}</small></button>`;};
@@ -803,7 +806,15 @@ function cloze(o){
 
 // ---------- grammar
 function gItems(){ return (C.grammar.items||[]).map((it,k)=>({k,topic:it[0],es:it[1],hint:it[2],o:it[3],why:it[4],he:it[5]||""})); }
-function gActive(){ const G=C.grammar; return (G.active&&G.active.length)?G.active:(G.focus?[G.focus]:Object.keys(G.topics||{})); }
+const gCount=t=>(C.grammar.items||[]).filter(i=>i[0]===t).length;
+const gReady=()=>Object.keys(C.grammar.topics||{}).filter(gCount);
+function gActive(){
+  const G=C.grammar;
+  if(gLevel){ const live=gLevel.filter(gCount); if(live.length) return live; }
+  const fromData=(G.active||[]).filter(gCount);
+  if(fromData.length) return fromData;
+  return G.focus&&gCount(G.focus)?[G.focus]:gReady();
+}
 function gPick(pool,n){ const score=x=>{const s=S.gitems[x.k]; return s?(s[1]/s[0])+s[0]*0.05:-1}; return shuffle(pool).sort((a,b)=>score(a)-score(b)).slice(0,n); }
 function gTopicPicker(){
   const G=C.grammar, all=gItems(), act=gActive();
@@ -813,8 +824,10 @@ function gTopicPicker(){
     <button class="cta" data-t="__mix">All mixed</button>
     ${Object.entries(G.topics||{}).map(([t,x])=>`<button class="box" data-t="${esc(t)}" style="border:0;text-align:start;cursor:pointer;color:inherit;font:inherit">
       <span class="rowline"><b>${esc(x.name)}</b><span class="small muted">${acc(t)}</span></span>
-      ${act.includes(t)?"":`<span class="small muted">Not in the daily practice yet. It will be added once it comes up in lessons.</span>`}</button>`).join("")}
+      ${act.includes(t)?"":`<span class="small muted">Not in your daily round. You can still practise it here.</span>`}</button>`).join("")}
+    <button class="ghost" id="glevel">Change what my daily round covers</button>
     <button class="ghost" id="quit">Back to home</button>`);
+  document.getElementById("glevel").onclick=gramSetup;
   document.getElementById("quit").onclick=home;
   app.querySelectorAll("[data-t]").forEach(b=>b.onclick=()=>grammar(true,false,b.dataset.t==="__mix"?null:b.dataset.t));
 }
@@ -1021,6 +1034,9 @@ function progress(){
            <p class="small muted" style="word-break:break-all">${esc(deck.src||deck.name)}</p>`
         : `<p class="small muted">The built-in Spanish list, last updated ${esc(fmtDate(C.deck.updated))} (${C.deck.cards.length} words).</p>`}
       <button class="ghost" id="deckchange">${deck?"Change or replace this list":"Use my own word list"}</button></div>
+    <div class="box"><h3>Grammar level</h3>
+      <p class="small">Your daily round covers: <b>${esc(gActive().map(t=>C.grammar.topics?.[t]?.short||C.grammar.topics?.[t]?.name||t).join(", "))}</b>.</p>
+      <button class="ghost" id="gramchange">Change which grammar I'm learning</button></div>
     <div class="box"><h3>Backup and transfer</h3>
       <p class="small muted">Progress is saved only on this phone.</p>
       <button class="ghost" id="bkp">Save a backup file</button>
@@ -1029,7 +1045,44 @@ function progress(){
       <p class="small" id="bkmsg" role="status"></p></div>`);
   wireBackup();
   document.getElementById("deckchange").onclick=()=>deckSetup(false);
+  document.getElementById("gramchange").onclick=gramSetup;
 }
+function gramSetup(){
+  tab=""; if(tts) speechSynthesis.cancel();
+  const G=C.grammar, on=new Set(gActive());
+  const row=([key,t])=>{
+    const n=gCount(key), has=n>0;
+    return `<button class="box pick ${on.has(key)?"on":""}" data-g="${esc(key)}" ${has?"":"disabled"}
+      style="border:2px solid ${on.has(key)?"var(--pri)":"var(--line)"};text-align:start;cursor:${has?"pointer":"default"};color:inherit;font:inherit;opacity:${has?1:.55}">
+      <span class="rowline"><b>${esc(t.name)}</b><span class="small muted">${has?`${n} questions`:"nothing written yet"}</span></span>
+      ${t.rule?`<span class="small muted">${esc(t.rule.slice(0,110))}${t.rule.length>110?"…":""}</span>`:""}</button>`;
+  };
+  sessionShell(`
+    <h1>Which grammar are you learning?</h1>
+    <p class="muted">Tick what your lessons cover. The daily grammar round only asks about these, and you can change it whenever your lessons move on.</p>
+    <div class="opts">${Object.entries(G.topics||{}).map(row).join("")}</div>
+    <p class="small muted" id="gmsg"></p>
+    <button class="cta" id="gsave">Save</button>
+    <button class="ghost" id="gback">Cancel</button>
+    <p class="small muted">Whatever you leave out is still there under free grammar practice, so you can look ahead without it showing up in the daily round.</p>`);
+  const chosen=new Set(on);
+  const paint=()=>{
+    app.querySelectorAll("[data-g]").forEach(b=>{
+      const yes=chosen.has(b.dataset.g);
+      b.classList.toggle("on",yes);
+      b.style.borderColor=yes?"var(--pri)":"var(--line)";
+    });
+    document.getElementById("gmsg").textContent=chosen.size?"":"Pick at least one.";
+    document.getElementById("gsave").disabled=!chosen.size;
+  };
+  app.querySelectorAll("[data-g]").forEach(b=>b.onclick=()=>{
+    const k=b.dataset.g; chosen.has(k)?chosen.delete(k):chosen.add(k); paint();
+  });
+  paint();
+  document.getElementById("gsave").onclick=()=>{ writeLevel([...chosen]); home(); };
+  document.getElementById("gback").onclick=home;
+}
+
 const SAMPLE=[["Spanish","Translation","Example","Example translation","Topic"],
   ["la mesa","table","La mesa de la cocina es grande.","The kitchen table is big.","House"],
   ["el perro","dog","Mi perro duerme en el sofá.","My dog sleeps on the sofa.","Animals"],
