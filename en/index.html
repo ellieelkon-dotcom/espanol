@@ -363,36 +363,132 @@ function cardsFromRows(rows){
   });
   return {cards,skipped};
 }
-// Opens the blank for sentence completion on a list that has no `cl` of its own.
-// It only matches a word that stands in its own example, so most verbs, which
-// appear conjugated, sit the mode out until that engine runs here too.
-function blankFor(card){
-  if(!card.ex||!card.es) return null;
-  const bare=s=>s.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
-  const forms=new Set();
-  card.es.replace(/\(.*?\)/g,"").split(/[/,]/).forEach(part=>{
-    const v=noArt(bare(part.trim().replace(/[¡!¿?.,;:]/g,"")));
-    if(!v) return;
-    const bits=v.split(" "), head=bits[0], tail=bits.length>1?" "+bits.slice(1).join(" "):"";
+// ---------- finding the word inside its own example sentence
+// A card says pensar while its sentence says Pienso, so the forms a verb could
+// take are generated and the sentence decides which one is really there. Most
+// of what comes out is not Spanish; that costs nothing, since only a form the
+// sentence actually contains can match. Ported from tools/make-cloze.py, and
+// checked against every card that script has already done.
+const V_END={
+  ar:["o","as","a","amos","ais","an","e","es","emos","eis","en","aste","amos","asteis","aron",
+      "aba","abas","abamos","abais","aban","are","aras","aremos","areis","aran",
+      "aria","arias","ariamos","ariais","arian","ando","ado","ada","ados","adas",
+      "ase","ases","asemos","asen","ara","aras","aran","aramos"],
+  er:["o","es","e","emos","eis","en","a","as","amos","ais","an","i","iste","io","imos","isteis","ieron",
+      "ia","ias","iamos","iais","ian","ere","eras","era","eremos","ereis","eran",
+      "eria","erias","eriamos","eriais","erian","iendo","ido","ida","idos","idas",
+      "iese","ieses","iesemos","iesen","iera","ieras","ieran","ieramos"],
+  ir:["o","es","e","imos","is","en","a","as","amos","ais","an","i","iste","io","imos","isteis","ieron",
+      "ia","ias","iamos","iais","ian","ire","iras","ira","iremos","ireis","iran",
+      "iria","irias","iriamos","iriais","irian","iendo","ido","ida","idos","idas",
+      "iese","ieses","iesemos","iesen","iera","ieras","ieran","ieramos"],
+};
+const V_IRREG={
+  ser:"soy eres es somos sois son era eras eramos eran fui fuiste fue fuimos fueron sere seria siendo sido sea seas sean fuera fuese",
+  ir:"voy vas va vamos vais van iba ibas ibamos iban fui fuiste fue fuimos fueron ire iria yendo ido vaya vayas vayan fuera fuese",
+  haber:"he has ha hemos habeis han habia habias habiamos habian hubo hubiste hubieron habra habria habiendo habido haya hayas hayan hubiera hubiese hay",
+  estar:"estoy estas esta estamos estais estan estuve estuviste estuvo estuvimos estuvieron estare estaria estuviera este esten",
+  tener:"tengo tienes tiene tenemos teneis tienen tuve tuviste tuvo tuvimos tuvieron tendre tendria tenga tengas tengan tuviera ten",
+  hacer:"hago haces hace hacemos haceis hacen hice hiciste hizo hicimos hicieron hare haria haga hagas hagan hiciera hecho haz",
+  decir:"digo dices dice decimos decis dicen dije dijiste dijo dijimos dijeron dire diria diga digas digan dijera dicho diciendo",
+  poder:"puedo puedes puede podemos podeis pueden pude pudiste pudo pudimos pudieron podre podria pueda puedan pudiera pudiendo",
+  poner:"pongo pones pone ponemos poneis ponen puse pusiste puso pusimos pusieron pondre pondria ponga pongan pusiera puesto",
+  saber:"sabes sabe sabemos sabeis saben supe supiste supo supimos supieron sabre sabria sepa sepas sepan supiera sabiendo",
+  querer:"quiero quieres quiere queremos quereis quieren quise quisiste quiso quisimos quisieron querre querria quiera quieran quisiera",
+  venir:"vengo vienes viene venimos venis vienen vine viniste vino vinimos vinieron vendre vendria venga vengan viniera viniendo",
+  dar:"doy das damos dais dan diste dio dimos dieron dare daria den diera dando dado",
+  ver:"veo ves vemos veis vi viste vio vimos vieron vere veria vea vean viera viendo visto veia veias veian",
+  salir:"salgo sales sale salimos salis salen sali saliste salio salieron saldre saldria salga salgan saliera saliendo",
+  traer:"traigo traes trae traemos traen traje trajiste trajo trajimos trajeron traiga traigan trajera trayendo traido",
+  caer:"caigo caes cae caemos caen cai caiste cayo caimos cayeron caiga caigan cayera cayendo caido",
+  oir:"oigo oyes oye oimos ois oyen oi oiste oyo oyeron oiga oigan oyera oyendo oido",
+  leer:"leo lees lee leemos leen lei leiste leyo leimos leyeron leyera leyendo leido",
+  jugar:"juego juegas juega jugamos jugais juegan jugue jugaste jugo jugaron juegue jueguen jugara jugando jugado",
+};
+const V_CLITIC=["lo","la","le","me","te","se","nos","los","las","les","melo","selo"];
+const W_RE=/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+/g;
+const W_STOP=new Set(["se","me","te","le","lo","la","las","los","el","un","una",
+  "de","a","y","en","que","no","su","mi","es","ha","he"]);
+const bare=s=>String(s??"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+
+function stemsOf(stem){
+  const out=new Set([stem]);
+  let at=-1;
+  for(let i=0;i<stem.length;i++) if(stem[i]==="e"||stem[i]==="o") at=i;
+  if(at>=0) for(const [from,to] of [["e","ie"],["e","i"],["o","ue"],["o","u"]])
+    if(stem[at]===from) out.add(stem.slice(0,at)+to+stem.slice(at+1));
+  if(stem.endsWith("u")) out.add(stem.slice(0,-1)+"ue");
+  for(const x of [...out]){
+    if(x.endsWith("c"))  out.add(x.slice(0,-1)+"zc");   // conocer > conozco
+    if(x.endsWith("gu")) out.add(x.slice(0,-1));        // seguir > sigo
+    if(x.endsWith("u"))  out.add(x+"y");                // destruir > destruyo
+    if(x.endsWith("g"))  out.add(x.slice(0,-1)+"j");    // coger > cojo
+  }
+  for(const x of [...out]) out.add(x+"g");              // tener > tengo
+  for(const x of [...out]) out.add(x+"ig");             // traer > traigo
+  return out;
+}
+function verbForms(infinitive){
+  const inf=bare(infinitive), base=inf.endsWith("se")?inf.slice(0,-2):inf;
+  const out=new Set([inf,base]);
+  if(V_IRREG[base]) V_IRREG[base].split(" ").forEach(f=>out.add(f));
+  const tail=base.slice(-2);
+  if(base.length>2&&V_END[tail])
+    for(const st of stemsOf(base.slice(0,-2)))
+      for(const e of V_END[tail]) out.add(st+e);
+  for(const f of [...out]) if(f.length>3) for(const c of V_CLITIC) out.add(f+c);
+  return out;
+}
+function nounForms(es){
+  const out=new Set();
+  String(es).replace(/\(.*?\)/g,"").split(/[/,]/).forEach(part=>{
+    const t=part.trim().replace(/^[¡!¿?.,]+|[¡!¿?.,]+$/g,"").trim();
+    if(t){ out.add(bare(t)); out.add(bare(noArt(bare(t)))); }
+  });
+  out.delete("");
+  for(const v of [...out]){
+    const cut=v.indexOf(" ");
+    const head=cut<0?v:v.slice(0,cut), rest=cut<0?"":v.slice(cut);
     const group=new Set([head]);
     if(/[oae]$/.test(head)) for(const x of "oae") group.add(head.slice(0,-1)+x);
     for(const g of [...group]){ group.add(g+"s"); if(!/[aeiou]$/.test(g)) group.add(g+"es"); }
-    group.forEach(g=>forms.add(g+tail));
-  });
-  const find=text=>{
-    const toks=[...text.matchAll(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+/g)].map(m=>[m.index,m.index+m[0].length]);
-    for(let n=Math.min(4,toks.length);n>=1;n--)
-      for(let i=0;i+n<=toks.length;i++){
-        const a=toks[i][0], b=toks[i+n-1][1];
-        if(forms.has(bare(text.slice(a,b)))&&(n>1||b-a>2)) return [a,b];
-      }
-    return null;
-  };
-  const span=find(card.ex);
+    group.forEach(g=>out.add(g+rest));
+  }
+  return out;
+}
+function locateIn(sentence,forms,allowShort){
+  const toks=[...sentence.matchAll(W_RE)].map(m=>[m.index,m.index+m[0].length]);
+  for(let n=4;n>=1;n--){
+    let best=null;
+    for(let i=0;i+n<=toks.length;i++){
+      const a=toks[i][0], b=toks[i+n-1][1], surf=bare(sentence.slice(a,b));
+      if(!forms.has(surf)) continue;
+      if(n===1&&!allowShort&&(surf.length<=2||W_STOP.has(surf))) continue;
+      if(!best||b-a>best[1]-best[0]) best=[a,b];
+    }
+    if(best) return best;
+  }
+  return null;
+}
+function blankFor(card){
+  const ex=card.ex||"";
+  if(!ex||!card.es) return null;
+  let forms, span, hint;
+  if(card.kind==="verb"){
+    const infs=card.es.replace(/\(.*?\)/g,"").split(/[/,]/).map(x=>x.trim()).filter(Boolean);
+    forms=new Set();
+    infs.forEach(i=>verbForms(i).forEach(f=>forms.add(f)));
+    span=locateIn(ex,forms,false)||locateIn(ex,forms,true);
+    hint=infs.join(" / ");
+  } else {
+    forms=nounForms(card.es);
+    span=locateIn(ex,forms,false);
+    hint="";
+  }
   if(!span) return null;
   // another form of the same word left in the sentence would give the answer away
-  if(find(card.ex.slice(0,span[0])+" "+card.ex.slice(span[1]))) return null;
-  return [card.ex.slice(span[0],span[1]), span[0], ""];
+  if(locateIn(ex.slice(0,span[0])+" "+ex.slice(span[1]),forms,false)) return null;
+  return [ex.slice(span[0],span[1]), span[0], hint];
 }
 function readList(text){
   text=String(text||"").trim();
@@ -408,7 +504,14 @@ function readList(text){
     out={cards:built.cards, updated:"", skipped:built.skipped};
   }
   if(!out.cards.length) throw new Error("No words were found in that list.");
-  out.cards.forEach(c=>{ if(!Array.isArray(c.cl)){ const b=blankFor(c); if(b) c.cl=b; } });
+  out.cards.forEach(c=>{
+    if(Array.isArray(c.cl)) return;
+    let b=blankFor(c);
+    // a sheet almost never says which words are verbs, so when the plain reading
+    // finds nothing and the word could be an infinitive, try reading it as one
+    if(!b&&c.kind!=="verb"&&/(ar|er|ir)(se)?$/.test(bare(c.es.trim()))) b=blankFor({...c,kind:"verb"});
+    if(b) c.cl=b;
+  });
   return out;
 }
 async function fetchList(url){
