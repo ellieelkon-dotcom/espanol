@@ -4,6 +4,8 @@
 
 האפליקציה: https://ellieelkon-dotcom.github.io/espanol/
 
+Using the app with your own word list: **[Make It Yours — a short guide (English)](https://ellieelkon-dotcom.github.io/espanol/guide.html)**
+
 - `data/` רשימות המילים, הדקדוק וקטעי השמיעה. מתעדכן אוטומטית אחרי כל שיעור.
 - ההתקדמות נשמרת רק בטלפון, לא כאן.
 
